@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>6-Member Encrypted Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: 0 auto; padding: 20px; }
+        #login { text-align: center; margin: 50px 0; }
+        #username-setup { display: none; text-align: center; }
+        #chat { display: none; }
+        #messages { height: 400px; border: 1px solid #ddd; overflow-y: scroll; margin-bottom: 10px; padding: 10px; }
+        #members { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+        .member { padding: 5px 10px; background: #f0f0f0; border-radius: 3px; }
+        #room-id { font-weight: bold; color: #2b6cb0; }
+    </style>
+</head>
+<body>
+    <div id="login">
+        <h2>6-Member Secure Chat</h2>
+        <input type="password" id="password" placeholder="Group Password (default: uev)" required>
+        <button onclick="checkPassword()">Enter Chat</button>
+        <p id="error" style="color: red;"></p>
+    </div>
+
+    <div id="username-setup">
+        <h2>Choose Your Display Name</h2>
+        <input type="text" id="username-input" placeholder="Your name" required>
+        <button onclick="saveUsername()">Save & Join Chat</button>
+    </div>
+
+    <div id="chat">
+        <h2>Secure Group Chat | Room: <span id="room-id">default-room</span></h2>
+        <div>Connected: <span id="memberCount">0</span>/6 members</div>
+        <div id="members"></div>
+        <div id="messages"></div>
+        <input type="text" id="messageInput" placeholder="Type a message..." style="width: 70%">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <script>
+        // Configuration
+        const GROUP_PASSWORD = "uev";
+        const MAX_MEMBERS = 6;
+        const ROOM_ID = "default-6member-room"; // All users join same room
+        
+        // Crypto setup
+        function encrypt(msg, password) {
+            return CryptoJS.AES.encrypt(msg, password).toString();
+        }
+        
+        function decrypt(encrypted, password) {
+            return CryptoJS.AES.decrypt(encrypted, password).toString(CryptoJS.enc.Utf8);
+        }
+
+        // PeerJS and data setup
+        let peer;
+        let connections = {};
+        let currentPeerId;
+        let localMessages = JSON.parse(localStorage.getItem('encryptedChat')) || [];
+        let username = localStorage.getItem('chatUsername') || "";
+        let knownPeers = [];
+
+        // Simulated signaling server (in real app, use a real server)
+        const fakeSignalingServer = {
+            peers: [],
+            join: function(peerId) {
+                this.peers.push(peerId);
+                return this.peers.filter(id => id !== peerId);
+            }
+        };
+
+        function checkPassword() {
+            const password = document.getElementById("password").value || GROUP_PASSWORD;
+            
+            if (password !== GROUP_PASSWORD) {
+                document.getElementById("error").textContent = "Incorrect group password!";
+                return;
+            }
+
+            if (username) {
+                initApp();
+            } else {
+                document.getElementById("login").style.display = "none";
+                document.getElementById("username-setup").style.display = "block";
+            }
+        }
+
+        function saveUsername() {
+            username = document.getElementById("username-input").value.trim();
+            if (!username) return;
+            
+            localStorage.setItem('chatUsername', username);
+            document.getElementById("username-setup").style.display = "none";
+            initApp();
+        }
+
+        function initApp() {
+            document.getElementById("room-id").textContent = ROOM_ID;
+            
+            // Initialize peer connection with random ID
+            peer = new Peer(null, { debug: 2 });
+            
+            peer.on('open', (id) => {
+                currentPeerId = id;
+                document.getElementById("chat").style.display = "block";
+                
+                // Get list of existing peers from "signaling server"
+                knownPeers = fakeSignalingServer.join(currentPeerId);
+                
+                // Connect to existing peers
+                knownPeers.forEach(peerId => {
+                    connectToPeer(peerId);
+                });
+                
+                loadLocalMessages(GROUP_PASSWORD);
+                updateMemberList();
+            });
+
+            peer.on('connection', (conn) => {
+                setupConnection(conn);
+            });
+
+            peer.on('error', (err) => {
+                console.error('PeerJS error:', err);
+            });
+        }
+
+        function connectToPeer(peerId) {
+            if (connections[peerId] || peerId === currentPeerId) return;
+            
+            const conn = peer.connect(peerId, { reliable: true });
+            setupConnection(conn);
+        }
+
+        function setupConnection(conn) {
+            conn.on('open', () => {
+                connections[conn.peer] = conn;
+                updateMemberList();
+                
+                // Send our username first
+                conn.send({ type: 'handshake', username: username });
+                
+                // Send message history
+                localMessages.forEach(msg => {
+                    conn.send(msg);
+                });
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'handshake') {
+                    // Update username mapping
+                    connections[conn.peer].username = data.username;
+                    updateMemberList();
+                } else {
+                    // Normal message
+                    try {
+                        const decrypted = decrypt(data.text, GROUP_PASSWORD);
+                        displayMessage(data.senderName || data.sender, decrypted);
+                        
+                        if (!localMessages.some(m => m.id === data.id)) {
+                            localMessages.push(data);
+                            localStorage.setItem('encryptedChat', JSON.stringify(localMessages));
+                        }
+                    } catch (e) {
+                        console.error("Decryption failed:", e);
+                    }
+                }
+            });
+
+            conn.on('close', () => {
+                delete connections[conn.peer];
+                updateMemberList();
+            });
+        }
+
+        function sendMessage() {
+            const message = document.getElementById("messageInput").value;
+            if (!message.trim()) return;
+
+            const msgObj = {
+                id: Date.now().toString() + '-' + currentPeerId,
+                sender: currentPeerId,
+                senderName: username,
+                text: encrypt(message, GROUP_PASSWORD),
+                timestamp: new Date().toISOString()
+            };
+
+            // Broadcast to all connected members
+            Object.values(connections).forEach(conn => {
+                conn.send(msgObj);
+            });
+
+            // Store locally
+            localMessages.push(msgObj);
+            localStorage.setItem('encryptedChat', JSON.stringify(localMessages));
+            
+            // Display our own message immediately
+            displayMessage(username, message);
+            document.getElementById("messageInput").value = "";
+        }
+
+        function displayMessage(sender, message) {
+            const messagesDiv = document.getElementById("messages");
+            messagesDiv.innerHTML += `<p><strong>${sender}:</strong> ${message}</p>`;
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function loadLocalMessages(password) {
+            localMessages.forEach(msg => {
+                try {
+                    const decrypted = decrypt(msg.text, password);
+                    displayMessage(msg.senderName || msg.sender.slice(0, 5), decrypted);
+                } catch (e) {
+                    console.error("Failed to decrypt old message:", e);
+                }
+            });
+        }
+
+        function updateMemberList() {
+            const membersDiv = document.getElementById("members");
+            membersDiv.innerHTML = '';
+            
+            const allMembers = [{id: currentPeerId, name: username}];
+            Object.values(connections).forEach(conn => {
+                allMembers.push({id: conn.peer, name: conn.username || 'Member'});
+            });
+            
+            allMembers.forEach(member => {
+                membersDiv.innerHTML += `<div class="member">${member.name}</div>`;
+            });
+            
+            document.getElementById("memberCount").textContent = allMembers.length;
+        }
+
+        // Send message on Enter
+        document.getElementById("messageInput").addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>
