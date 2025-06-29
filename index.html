@@ -1,0 +1,90 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure Six Chat</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
+    #login, #chat { display: none; }
+    #chat { border: 1px solid #ccc; padding: 10px; }
+    .message { padding: 5px; margin-bottom: 5px; border-bottom: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <div id="login">
+    <h2>Enter Chat</h2>
+    <input type="text" id="username" placeholder="Choose a username" /><br><br>
+    <input type="password" id="password" placeholder="Enter password" />
+    <button onclick="login()">Enter</button>
+  </div>
+  <div id="chat">
+    <h2>Secure Chat</h2>
+    <div id="messages"></div>
+    <input type="text" id="msg" placeholder="Type a message" />
+    <button onclick="sendMessage()">Send</button>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.js"></script>
+  <script>
+    const sharedPassword = "uev";
+    let messages = [];
+    let username = "";
+
+    function login() {
+      const pwd = document.getElementById("password").value;
+      const uname = document.getElementById("username").value.trim();
+      if (pwd === sharedPassword && uname) {
+        username = uname;
+        document.getElementById("login").style.display = "none";
+        document.getElementById("chat").style.display = "block";
+        loadMessages();
+      } else {
+        alert("Wrong password or missing username");
+      }
+    }
+
+    function encrypt(text) {
+      return CryptoJS.AES.encrypt(text, sharedPassword).toString();
+    }
+
+    function decrypt(cipher) {
+      return CryptoJS.AES.decrypt(cipher, sharedPassword).toString(CryptoJS.enc.Utf8);
+    }
+
+    function sendMessage() {
+      const input = document.getElementById("msg");
+      const plain = input.value.trim();
+      if (!plain) return;
+      const encrypted = encrypt(username + ": " + plain);
+      messages.push(encrypted);
+      localStorage.setItem("chat", JSON.stringify(messages));
+      input.value = "";
+      renderMessages();
+    }
+
+    function renderMessages() {
+      const box = document.getElementById("messages");
+      box.innerHTML = "";
+      messages.forEach(msg => {
+        const div = document.createElement("div");
+        div.className = "message";
+        div.innerText = decrypt(msg);
+        box.appendChild(div);
+      });
+    }
+
+    function loadMessages() {
+      const saved = localStorage.getItem("chat");
+      if (saved) {
+        messages = JSON.parse(saved);
+        renderMessages();
+      }
+    }
+
+    window.onload = () => {
+      document.getElementById("login").style.display = "block";
+    }
+  </script>
+</body>
+</html>
